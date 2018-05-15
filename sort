@@ -1,0 +1,419 @@
+;***************************
+;PROJECT:冒泡排序
+;NAME:
+;DATE:2018.4.16
+;UPDATE:
+;4.18 去除十六进制显示
+;4.19 添加控制排序方向
+;---- 优化冒泡算法(增加提前结束)
+;后续 拟增加各种排序算法
+;4.20 将输入位数降为两位数
+;4.25 将黑白文本显示改为彩色文本显示(改动较大)
+;4.26 优化简化(变量使用和寄存器使用简化)
+;***************************
+STACK	SEGMENT STACK
+		DW 100H DUP(?)
+TOP		LABEL WORD
+STACK	ENDS
+
+DATA	SEGMENT
+;************************
+XCNT	DB 00H	;X轴坐标
+YCNT	DB 00H	;Y轴坐标
+CHAR_MODE DB 03H	;字符属性
+SORT_MODE_FLAG DB 00H	;排序方式(00h大到小、01h小到大)
+CNT DW 00H
+;NOCG_FLAG DB 00H		;记录某次排序是否交换过数据
+;此变量用寄存器BX代替
+SORTSTR1 DB 'sort( min->max ):$'
+SORTSTR2 DB 'sort( max->min ):$'
+SDIG  DB 'Dig: $'
+SNUM  DB 'num : 16073212$'
+SNAME DB 'name: Teng Jia Lu$'
+SDATE  DB 'date: $'
+STIME  DB 'time: $'
+;测试数字集
+BUFFER2	DB 20, 1, 3,  4,5,-2, 55,4,-7, 0,-88,-6,  0,  4,11,12,-12,  5,0,66,-7	;
+BUFFER	DB 20,65,34,-23,1, 0,-4,0, 66,45,-67, 8,-56,-34,0,67,  2,-45,0,37,0	;
+BUFFER1	DB 20,-44,-49,-40,-31,-22,-3,-4,-3,-2,1,2,3,4,5,6,7,8,9,10,11	;此数据用于测试算法优化情况
+BUFFER3	DB 40H	;产生64个伪随机数
+	X = 17
+	REPT 40H
+	X = (X+44) MOD 41 - 19
+	DB X
+	ENDM
+;************************
+DATA	ENDS
+CODE	SEGMENT
+		ASSUME CS:CODE,DS:DATA,ES:DATA,SS:STACK
+;************************
+;******define******
+;TOXY
+;移动光标至指定位置
+;input:
+;	X:X坐标
+;	Y:Y坐标
+TOXY	MACRO X,Y
+	PUSH AX
+	PUSH DX
+	MOV AH,02H
+	MOV DH,X
+	MOV DL,Y
+	INT 10H
+	POP DX
+	POP AX
+	ENDM
+;DPSTR
+;输出字符串
+;input:STRING 字符串头位置
+;output:输出字符串
+DPSTR	MACRO STRING
+	PUSH AX
+	PUSH DX
+	MOV AH,09H
+	LEA DX,STRING	;[DS已经指向此数据段]
+	INT 21H
+	POP DX
+	POP AX
+	ENDM
+;DPASCII
+;输出字符
+;input:
+;	CHAR 字符(AL)
+;	MODE 字符属性(BL)
+;	NUM  重复次数(CX)
+;output:显示字符
+DPASCII	MACRO CHAR,MODE,NUM
+	PUSH AX
+	PUSH BX
+	PUSH CX
+;以下数据载入寄存器
+;必须将char最先装入,否则可能会被覆盖
+	MOV AL,CHAR	;字符的ASCII值
+	MOV AH,09H
+	XOR BH,BH	;页号置为0(第一页)
+	MOV BL,MODE	;字符类型(闪烁1,背景3,前景4)
+	MOV CX,NUM	;字符重复次数
+	INT 10H		
+	POP CX
+	POP BX
+	POP AX
+	ENDM
+;************************
+START:
+	MOV AX,DATA
+	MOV DS,AX
+	MOV ES,AX
+	MOV AX,STACK
+	MOV SS,AX
+	LEA SP,TOP
+;********************
+	MOV AX,03H
+	INT 10H		;清屏(80*25彩色文本模式)
+;从键盘读入数字(最多三位数即可)
+	MOV BL,0AH
+	XOR DX,DX
+MOV CX,03H
+;原理 y=10*(10*(10*x4+x3)+x2)+x1
+READ:
+	MOV AH,01H
+	INT 21H
+	CMP AL,0DH		;判断是否输入回车
+	JZ READ_END		;输入回车则退出输入
+	XOR AH,AH
+	SUB AL,30H
+	PUSH AX			;保存输入数字
+	MOV AX,DX		;将上次结果存入AX
+	MUL BL			;上次结果×10
+	MOV DX,AX		;将相乘的结果存入DX
+	POP AX			;将输入数字取出
+	ADD DX,AX		;相加
+LOOP READ
+READ_END:
+	CMP DX,00H
+	JNZ NUM_NOCHG
+	MOV DX,20		;等于0则置为20
+NUM_NOCHG:
+	CMP DX,56		;14*4
+	JBE NUM_OK
+	MOV DX,56		;大于56则置为56
+NUM_OK:				;对输入数字进行修正
+	MOV AX,03H
+	INT 10H			;清屏(80*25彩色文本模式)
+	TOXY 00H,00H
+	MOV AX,DX
+	MOV BL,05H
+	CALL DPALD
+;对显示数据进行预处理
+	LEA SI,BUFFER+1
+	MOV XCNT,01H
+	MOV YCNT,00H
+	TOXY XCNT,YCNT
+	DPSTR SDIG
+	ADD YCNT,06H	;移动光标
+	MOV CX,DX		;将显示数的个数传入cx
+;显示初始数据
+	MOV BL,02H
+	CALL DISPDATA
+;读入排序方向
+	ADD XCNT,02H
+	MOV YCNT,00H
+	TOXY XCNT,YCNT
+	MOV AH,07H	;不带回显
+	INT 21H		;此处需要先读入方向键的第一个空字符,,坑,,
+	MOV AH,07H
+	INT 21H
+	;		0 75 LEFT	ARROW 键
+	;		0 72 UP		ARROW 键
+	;		0 77 RIGHT	ARROW 键
+	;		0 80 DOWN	ARROW 键
+	;		还有一种是25h,26H,27H,28H,原因不明
+	;			判断输入为从小到大还是从大到小
+	CMP AL,75	;左键(大到小)	右键(小到大)
+	JZ MAX_TO_MIN
+	DPSTR SORTSTR1
+	MOV AH,07H
+	INT 21H
+	MOV SORT_MODE_FLAG,01H	;标记为小到大排序
+	JMP SET_END
+MAX_TO_MIN:
+	DPSTR SORTSTR2
+	MOV AH,07H
+	INT 21H
+	MOV SORT_MODE_FLAG,00H	;标记为大到小排序
+SET_END:
+	LEA SI,BUFFER+1
+	MOV CX,DX
+	DEC CX
+;排序
+SORT_N:			;外循环
+	PUSH CX
+	PUSH SI
+	XOR BX,BX	;标记置零
+	SORT_P:			;内循环
+			MOV AL,[SI]                              
+			CMP SORT_MODE_FLAG,00H	;从大到小跳转
+			JZ MODE_O
+			CMP AL,[SI+1]
+			JLE NO_CH		;大于则交换
+			JMP CHANGE
+		MODE_O:
+			CMP AL,[SI+1]
+			JGE NO_CH		;小于则交换
+		CHANGE:
+			XCHG AL,[SI+1]
+			XCHG [SI],AL
+			MOV BX,01H
+			INC CNT
+		NO_CH:
+			INC SI
+	LOOP SORT_P
+	CMP BX,00H
+	JZ SORT_END
+	POP SI
+	POP CX
+LOOP SORT_N
+SORT_END:
+;此算法和课本类似,区别在于课本从后往前比,此处从前往后比,复杂度相同
+	LEA SI,BUFFER+1
+	ADD XCNT,02H
+	MOV YCNT,00H
+	TOXY XCNT,YCNT
+	DPSTR SDIG
+	ADD YCNT,06H	;移动光标
+	MOV CX,DX
+;显示排序后数据
+	MOV BL,03H
+	CALL DISPDATA
+
+;
+	ADD XCNT,02H
+	MOV YCNT,00H
+	TOXY XCNT,YCNT
+	MOV AX,CNT
+	CALL DPAXD
+;姓名学号
+	ADD XCNT,02H
+	TOXY XCNT,30H
+	DPSTR SNUM
+	INC XCNT
+	TOXY XCNT,30H
+	DPSTR SNAME
+;日期
+	INC XCNT
+	MOV YCNT,30H
+	TOXY XCNT,YCNT
+	DPSTR SDATE
+	MOV AH,2AH
+	INT 21H		;取日期
+;显示日期;
+	ADD YCNT,06H
+	TOXY XCNT,YCNT
+	MOV AX,CX	;年
+	MOV BL,05H
+	CALL DPAXD
+	DPASCII 2DH,02H,01H	;横线
+	INC YCNT
+	TOXY XCNT,YCNT
+	MOV AL,DH	;月
+	CALL DPALD
+	INC YCNT
+	TOXY XCNT,YCNT
+	DPASCII 2DH,02H,01H	;横线
+	INC YCNT
+	TOXY XCNT,YCNT
+	MOV AL,DL	;日
+	CALL DPALD	
+;时间
+	INC XCNT
+	MOV YCNT,30H
+	TOXY XCNT,YCNT
+	DPSTR STIME
+	MOV AH,2CH
+	INT 21H		;取时间
+;显示时间
+	ADD YCNT,06H
+	TOXY XCNT,YCNT
+	MOV AL,CH	;时
+	CALL DPALD
+	INC YCNT
+	TOXY XCNT,YCNT
+	DPASCII 3AH,82H,01H	;冒号
+	INC YCNT
+	TOXY XCNT,YCNT
+	MOV AL,CL	;分
+	CALL DPALD
+	INC YCNT
+	TOXY XCNT,YCNT
+	DPASCII 3AH,82H,01H;冒号
+	INC YCNT
+	TOXY XCNT,YCNT
+	MOV AL,DH	;秒
+	CALL DPALD
+;返回DOS
+	MOV AH,4CH
+	INT 21H
+;************************
+;******functions******
+;DPALD
+;显示十进制两位数
+;input AL
+;	   BL 字符属性
+;output 显示该两位数
+DPALD	PROC NEAR
+	MOV CHAR_MODE,BL
+	PUSH BX
+	PUSH AX
+	XOR AH,AH
+	MOV BL,0AH
+	DIV BL
+	ADD AL,30H	;十位(商)
+	DPASCII AL,CHAR_MODE,01H
+	INC YCNT
+	TOXY XCNT,YCNT
+	ADD AH,30H	;个位(余数)
+	DPASCII AH,CHAR_MODE,01H
+	POP AX
+	POP BX
+	RET
+DPALD	ENDP
+;以十进制显示16位二进制数
+;无前导0,不占位
+;input: AX
+;		BL 字符属性
+;output:显示此数字
+DPAXD PROC NEAR
+	MOV CHAR_MODE,BL
+	PUSH BX
+	PUSH CX
+	PUSH DX
+	MOV BX,0AH	;装入10
+	XOR DX,DX	
+MOV CX,05H
+MM:	
+	DIV BX		;除以10
+	PUSH DX		;保存余数
+	XOR DX,DX	;清空DX
+LOOP MM
+	MOV BX,00H	;是否为前导0标志(eg:00102)
+MOV CX,05H
+NN:		
+	POP DX		;取出保存的位数
+	ADD DL,30H	;转为ASCII值
+	CMP BX,01H	;判断是否为前导0
+	JZ NODFZ
+	CMP DL,30H	;判断是否为0
+	JZ NODISP	;是的话转到不显示
+	MOV BX,01H	;不是0则标志置1
+NODFZ:
+	DPASCII DL,CHAR_MODE,01H
+	INC YCNT
+	TOXY XCNT,YCNT
+NODISP:
+LOOP NN
+	POP DX
+	POP CX
+	POP BX
+	RET
+DPAXD	ENDP
+;DISPDATA
+;显示数据(格式)
+;input:SI指向的内存空间内的数据
+;output:所有数据按一定格式显示
+DISPDATA PROC NEAR
+NUM_SHOW:
+	MOV AL,[SI]	;此处赋值
+	TOXY XCNT,YCNT
+	CMP AL,00H
+	JGE GREATZ_EQUALZ
+	DEC AL
+	NOT AL		;减1取反
+	DEC YCNT
+	TOXY XCNT,YCNT
+	DPASCII 2DH,BL,01H	;显示负号
+	INC YCNT
+	TOXY XCNT,YCNT
+GREATZ_EQUALZ:
+	CALL DPALD
+	INC SI
+	DEC CX
+	JZ JMP_BREAK	;等于0直接跳出
+	ADD YCNT,04H	;由于输出两位数时光标向后移动了移位,此处少移动一位
+	CMP YCNT,4CH	;65(12*5+5)
+	JB  NCHG_LINE	;不需要换行
+	ADD XCNT,02H
+	MOV YCNT,06H	;移动光标	
+NCHG_LINE:
+	JMP NUM_SHOW
+JMP_BREAK:
+	;LOOP NUM_SHOW	;//去掉hex显示后代码显著减少,可以loop
+	;				;//但如果数据为每行个数整倍数,最后会多输出换行
+	;				;//此处依旧使用原格式方便解决此问题
+	RET
+DISPDATA ENDP
+;********************
+CODE	ENDS
+	END START
+
+;颜色表
+;寄存器:BL
+;D7   :闪烁选择
+;D6-D4:背景色
+;D3-D0:前景色
+;闪烁选择：
+; 0 不闪烁	1 闪烁
+;背景色:
+;	000		黑		100		红
+;	001		蓝		101		品红
+;	010		绿		110		棕
+;	011		青		111		白
+;前景色:
+;	0000	黑		1000	灰
+;	0001	蓝		1001	浅灰
+;	0010	绿		1010	浅绿
+;	0011	青		1011	浅青
+;	0100	红		1100	浅红
+;	0101	品红	1101	浅品红
+;	0110	棕		1110	黄
+;	0111	白		1111	强度白
+;
