@@ -1,0 +1,206 @@
+;***************************
+;PROJECT:
+;NAME:
+;DATE:
+;UPDATE:
+;***************************
+STACK	SEGMENT
+		DW 100H DUP(?)
+TOP		LABEL WORD
+STACK	ENDS
+DATA	SEGMENT
+;************************
+;DATA
+;************************
+DATA	ENDS
+CODE	SEGMENT
+		ASSUME CS:CODE,DS:DATA,ES:DATA,SS:STACK
+;************************
+;******define******
+;TOXY
+;移动光标至指定位置
+;input:
+;	X:X坐标
+;	Y:Y坐标
+TOXY	MACRO X,Y
+	PUSH AX
+	PUSH DX
+	MOV AH,02H
+	MOV DH,X
+	MOV DL,Y
+	INT 10H
+	POP DX
+	POP AX
+	ENDM
+;DPSTR
+;输出字符串
+;input:STRING 字符串头位置
+;output:输出字符串
+DPSTR	MACRO STRING
+	PUSH AX
+	PUSH DX
+	MOV AH,09H
+	LEA DX,STRING	;[DS已经指向此数据段]
+	INT 21H
+	POP DX
+	POP AX
+	ENDM
+;DPASCII
+;输出字符
+;input:
+;	CHAR 字符
+;	MODE 字符属性
+;	NUM  重复次数
+;output:显示字符
+DPASCII	MACRO CHAR,MODE,NUM
+	PUSH AX
+	PUSH BX
+	PUSH CX
+;以下数据载入寄存器
+;必须将char最先装入,否则可能会被覆盖
+	MOV AL,CHAR	;字符的ASCII值
+	MOV AH,09H
+	XOR BH,BH	;页号置为0(第一页)
+	MOV BL,MODE	;字符类型(闪烁1,背景3,前景4)
+	MOV CX,NUM	;字符重复次数
+	INT 10H		
+	POP CX
+	POP BX
+	POP AX
+	ENDM
+;************************
+START:
+	MOV AX,DATA
+	MOV DS,AX
+	MOV ES,AX
+	MOV AX,STACK
+	MOV SS,AX
+	LEA SP,TOP
+;********************
+	MOV AX,03H
+	INT 10H		;清屏(80*25彩色文本模式)
+;
+;
+;PROGRAMING
+
+
+
+;
+;
+;返回DOS
+	MOV AH,4CH
+	INT 21H
+;************************
+;******functions******
+;DPALD
+;显示十进制两位数
+;input AL
+;output 显示该两位数
+DPALD	PROC NEAR
+	PUSH AX
+	PUSH BX
+	XOR AH,AH
+	MOV BL,0AH
+	DIV BL
+	ADD AL,30H	;十位(商)
+	DPASCII AL,04H,01H
+	INC YCNT
+	TOXY X2CNT,YCNT
+	ADD AH,30H	;个位(余数)
+	DPASCII AH,04H,01H
+	POP BX
+	POP AX
+	RET
+DPALD	ENDP
+;以十进制显示16位二进制数
+;无前导0,不占位
+;input: AX
+;output:显示此数字
+DPAXD PROC NEAR
+	PUSH BX
+	PUSH CX
+	PUSH DX
+	MOV BX,0AH	;装入10
+	XOR DX,DX	
+MOV CX,05H
+MM:	
+	DIV BX		;除以10
+	PUSH DX		;保存余数
+	XOR DX,DX	;清空DX
+LOOP MM
+	MOV BX,00H	;是否为前导0标志(eg:00102)
+MOV CX,05H
+NN:		
+	POP DX		;取出保存的位数
+	ADD DL,30H	;转为ASCII值
+	CMP BX,01H	;判断是否为前导0
+	JZ NODFZ
+	CMP DL,30H	;判断是否为0
+	JZ NODISP	;是的话转到不显示
+	MOV BX,01H	;不是0则标志置1
+NODFZ:
+	DPASCII DL,04H,01H
+	INC YCNT
+	TOXY X2CNT,YCNT
+NODISP:
+LOOP NN
+	POP DX
+	POP CX
+	POP BX
+	RET
+DPAXD	ENDP
+;显示十六进制两位数
+DPALH PROC NEAR
+	PUSH AX
+	PUSH CX
+	PUSH AX
+	XOR AH,AH
+	MOV CL,04H
+	SHR AL,CL	;将高4位移到低4位
+	CMP AL,0AH
+	JNGE CHG1
+	ADD AL,07H	;加37H转为ASCII的大写字母字符
+CHG1:
+	ADD AL,30H	;加30H转为ASCII的数字字符
+	DPASCII AL,03H,01H
+	INC YCNT
+	TOXY X1CNT,YCNT
+	POP AX
+	AND AL,0FH	;将高4位置0
+	CMP AL,0AH
+	JNGE CHG2
+	ADD AL,07H	;加37H转为ASCII的大写字母字符
+CHG2:
+	ADD AL,30H	;加30H转为ASCII的数字字符
+	DPASCII AL,03H,01H
+	POP CX
+	POP AX
+	RET
+DPALH ENDP
+;********************
+CODE	ENDS
+	END START
+
+	
+;颜色表
+;寄存器:BL
+;D7   :闪烁选择
+;D6-D4:背景色
+;D3-D0:前景色
+;闪烁选择：
+; 0 不闪烁	1 闪烁
+;背景色:
+;	000		黑		100		红
+;	001		蓝		101		品红
+;	010		绿		110		棕
+;	011		青		111		白
+;前景色:
+;	0000	黑		1000	灰
+;	0001	蓝		1001	浅灰
+;	0010	绿		1010	浅绿
+;	0011	青		1011	浅青
+;	0100	红		1100	浅红
+;	0101	品红	1101	浅品红
+;	0110	棕		1110	黄
+;	0111	白		1111	强度白
+;
